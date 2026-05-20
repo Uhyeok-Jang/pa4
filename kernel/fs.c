@@ -20,8 +20,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "file.h"
-
-#define BLKS_PER_PG (PGSIZE / BSIZE)
+#include "memlayout.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
@@ -700,40 +699,73 @@ nameiparent(char *path, char *name)
   return namex(path, 1, name);
 }
 
-// swap space에서 kernel memory page 하나 read
+// pa4: swapread
 void swapread(uint64 ptr, int blkno)
 {
   struct buf *bp;
   int i;
+  const int BLKS_PER_PG = PGSIZE / BSIZE;
 
   if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
-    panic("swapread: invalid blkno");
+    panic("swapread: blkno exceeded range");
 
   for (i = 0; i < BLKS_PER_PG; i++)
   {
     nr_sectors_read++;
     bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    // kernel page를 swap-in 하는 거니까 memmove 사용
-    memmove((void *)(ptr + i * BSIZE), bp->data, BSIZE);
+
+    // syscall 경로에서 user virtual address가 넘어옴 -> user_dst = 1
+    // page replacement에서 kernel page address 넘어옴 -> user_dst = 0
+    if (ptr < KERNBASE)
+    {
+      if (either_copyout(1, ptr + i * BSIZE, bp->data, BSIZE) == -1)
+        panic("swapread: either_copyout failed");
+    }
+    else
+    {
+      if (either_copyout(0, ptr + i * BSIZE, bp->data, BSIZE) == -1)
+        panic("swapread: either_copyout failed");
+    }
+
     brelse(bp);
   }
 }
 
-// swap space에 기록
+// pa4: swapwrite
 void swapwrite(uint64 ptr, int blkno)
 {
   struct buf *bp;
   int i;
+  const int BLKS_PER_PG = PGSIZE / BSIZE;
 
   if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
-    panic("swapwrite: invalid blkno");
+    panic("swapwrite: blkno exceeded range");
 
   for (i = 0; i < BLKS_PER_PG; i++)
   {
     nr_sectors_write++;
     bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    memmove(bp->data, (void *)(ptr + i * BSIZE), BSIZE);
+
+    // syscall 경로에서 user virtual address 넘어옴 -> user_src = 1
+    // page replacement에서 kernel direct-mapped address 넘어옴 -> user_src = 0
+    if (ptr < KERNBASE)
+    {
+      if (either_copyin(bp->data, 1, ptr + i * BSIZE, BSIZE) == -1)
+        panic("swapwrite: either_copyin failed");
+    }
+    else
+    {
+      if (either_copyin(bp->data, 0, ptr + i * BSIZE, BSIZE) == -1)
+        panic("swapwrite: either_copyin failed");
+    }
+
     bwrite(bp);
     brelse(bp);
   }
+}
+
+void swapstat(int *nr_sectors_read_out, int *nr_sectors_write_out)
+{
+  *nr_sectors_read_out = nr_sectors_read;
+  *nr_sectors_write_out = nr_sectors_write;
 }

@@ -505,33 +505,16 @@ sys_pipe(void)
 }
 
 // swap syscall wrapper
-// 
-// kernel 내부 swapread/swapwrite: kernel page 주소 받음
-// user syscall: 임시 kernel page 거쳐서 user buffer - swap space 사이를 복사
 uint64
 sys_swapread(void)
 {
   uint64 ptr;
   int blkno;
-  char *mem;
-  struct proc *p = myproc();
 
   argaddr(0, &ptr);
   argint(1, &blkno);
 
-  mem = kalloc();
-  if (mem == 0)
-    return -1;
-
-  // disk에서 kernel page로 읽고 user buffer로 복사
-  swapread((uint64)mem, blkno);
-  if (copyout(p->pagetable, ptr, mem, PGSIZE) < 0)
-  {
-    kfree(mem);
-    return -1;
-  }
-
-  kfree(mem);
+  swapread(ptr, blkno);
   return 0;
 }
 
@@ -540,25 +523,11 @@ sys_swapwrite(void)
 {
   uint64 ptr;
   int blkno;
-  char *mem;
-  struct proc *p = myproc();
 
   argaddr(0, &ptr);
   argint(1, &blkno);
 
-  mem = kalloc();
-  if (mem == 0)
-    return -1;
-
-  // user buffer를 kernel page로 복사하고 그 kernel page를 swap space에 씀
-  if (copyin(p->pagetable, mem, ptr, PGSIZE) < 0)
-  {
-    kfree(mem);
-    return -1;
-  }
-  swapwrite((uint64)mem, blkno);
-
-  kfree(mem);
+  swapwrite(ptr, blkno);
   return 0;
 }
 
@@ -567,13 +536,19 @@ sys_swapstat(void)
 {
   uint64 user_nr_read_ptr;
   uint64 user_nr_write_ptr;
+  int nr_read;
+  int nr_write;
   struct proc *p = myproc();
 
   argaddr(0, &user_nr_read_ptr);
   argaddr(1, &user_nr_write_ptr);
 
-  if (copyout(p->pagetable, user_nr_read_ptr, (char*)&nr_sectors_read, sizeof(int)) < 0 ||
-  copyout(p->pagetable, user_nr_write_ptr, (char *)&nr_sectors_write, sizeof(int)) < 0)
+  swapstat(&nr_read, &nr_write);
+
+  if (copyout(p->pagetable, user_nr_read_ptr, (char *)&nr_read, sizeof(int)) < 0)
+    return -1;
+
+  if (copyout(p->pagetable, user_nr_write_ptr, (char *)&nr_write, sizeof(int)) < 0)
     return -1;
 
   return 0;
