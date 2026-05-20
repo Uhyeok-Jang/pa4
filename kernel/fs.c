@@ -21,9 +21,13 @@
 #include "buf.h"
 #include "file.h"
 
+#define BLKS_PER_PG (PGSIZE / BSIZE)
+
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
+int nr_sectors_read;
+int nr_sectors_write;
 struct superblock sb; 
 
 // Read the super block.
@@ -694,4 +698,42 @@ struct inode*
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// swap space에서 kernel memory page 하나 read
+void swapread(uint64 ptr, int blkno)
+{
+  struct buf *bp;
+  int i;
+
+  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
+    panic("swapread: invalid blkno");
+
+  for (i = 0; i < BLKS_PER_PG; i++)
+  {
+    nr_sectors_read++;
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
+    // kernel page를 swap-in 하는 거니까 memmove 사용
+    memmove((void *)(ptr + i * BSIZE), bp->data, BSIZE);
+    brelse(bp);
+  }
+}
+
+// swap space에 기록
+void swapwrite(uint64 ptr, int blkno)
+{
+  struct buf *bp;
+  int i;
+
+  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
+    panic("swapwrite: invalid blkno");
+
+  for (i = 0; i < BLKS_PER_PG; i++)
+  {
+    nr_sectors_write++;
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
+    memmove(bp->data, (void *)(ptr + i * BSIZE), BSIZE);
+    bwrite(bp);
+    brelse(bp);
+  }
 }

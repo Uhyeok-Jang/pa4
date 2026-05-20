@@ -349,6 +349,16 @@ sfence_vma()
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
 
+// pa4: page struct
+struct page{
+	struct page *next;
+	struct page *prev;
+	pagetable_t  pagetable;
+	char *vaddr;
+};
+
+
+
 #endif // __ASSEMBLER__
 
 #define PGSIZE 4096 // bytes per page
@@ -362,6 +372,12 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // user can access
+
+// 클럭의 reference bit
+#define PTE_A (1L << 6)
+
+// PTE_V=0 & PTE_SWAP=1 -> swap space에 있으니까 swap slot * PGSIZE 저장
+#define PTE_SWAP (1L << 8)
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)

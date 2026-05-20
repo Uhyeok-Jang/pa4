@@ -284,16 +284,23 @@ fork(void)
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
+  if ((np = allocproc()) == 0)
+  {
     return -1;
   }
 
-  // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  // uvmcopy 전에 lock 잠깐 풀어야됨
+  release(&np->lock);
+
+  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
+  {
+    acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
+
+  acquire(&np->lock);
   np->sz = p->sz;
 
   // copy saved user registers.
@@ -392,6 +399,7 @@ wait(uint64 addr)
 {
   struct proc *pp;
   int havekids, pid;
+  int xstate;
   struct proc *p = myproc();
 
   acquire(&wait_lock);
@@ -408,12 +416,21 @@ wait(uint64 addr)
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
-                                  sizeof(pp->xstate)) < 0) {
-            release(&pp->lock);
-            release(&wait_lock);
+          xstate = pp->xstate;
+          
+          // child pid, xstate 저장하고, lock 풀고 copyout 실행
+          release(&pp->lock);
+          release(&wait_lock);
+
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&xstate,
+                                  sizeof(xstate)) < 0) {
             return -1;
           }
+
+          // copyout 끝나고 lock 잡아서 child 정리
+          acquire(&wait_lock);
+          acquire(&pp->lock);
+
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);

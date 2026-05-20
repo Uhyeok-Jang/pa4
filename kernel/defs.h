@@ -53,6 +53,10 @@ int             readi(struct inode*, int, uint64, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
+// pa5: function defs
+void swapread(uint64 ptr, int blkno);
+void swapwrite(uint64 ptr, int blkno);
+void swapstat(int *, int *);
 
 // ramdisk.c
 void            ramdiskinit(void);
@@ -63,6 +67,11 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+// user page의 LRU 관련, swap 보조 함수
+void lru_add(pagetable_t, uint64, uint64);
+void lru_remove_pa(uint64);
+int swap_in(pagetable_t, uint64);
+void swap_free_slot_by_pte(pte_t);
 
 // log.c
 void            initlog(int, struct superblock*);

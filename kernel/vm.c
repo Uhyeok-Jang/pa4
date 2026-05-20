@@ -111,15 +111,28 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte_t *pte;
   uint64 pa;
 
-  if(va >= MAXVA)
+  if (va >= MAXVA)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
+  if (pte == 0)
     return 0;
-  if((*pte & PTE_V) == 0)
+
+  // if swapped-out user page -> 주소 변환 전에 swap-in 먼저
+  if (((*pte & PTE_V) == 0) && (*pte & PTE_SWAP))
+  {
+    if (swap_in(pagetable, va) < 0)
+      return 0;
+
+    pte = walk(pagetable, va, 0);
+
+    if (pte == 0)
+      return 0;
+  }
+
+  if ((*pte & PTE_V) == 0)
     return 0;
-  if((*pte & PTE_U) == 0)
+  if ((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
   return pa;
@@ -163,6 +176,9 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    // kernel mapping, page table page -> LRU list 삽입 x
+    if (perm & PTE_U)
+      lru_add(pagetable, a, pa);
     if(a == last)
       break;
     a += PGSIZE;
@@ -180,21 +196,40 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
 
-  if((va % PGSIZE) != 0)
+  if ((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
-  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
+  for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
+  {
+    if ((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
-      panic("uvmunmap: not a leaf");
-    if(do_free){
+
+    if (*pte & PTE_V)
+    {
+      if ((*pte & (PTE_R | PTE_W | PTE_X)) == 0)
+        panic("uvmunmap: not a leaf");
+
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+
+      // user page의 virtual mapping 사라지면 resident 추적 끝
+      if (*pte & PTE_U)
+        lru_remove_pa(pa);
+
+      if (do_free)
+        kfree((void *)pa);
+
+      *pte = 0;
     }
-    *pte = 0;
+    else if (*pte & PTE_SWAP)
+    {
+      // disk swap space에 있는 page -> swap slot 비우고 PTE clear
+      swap_free_slot_by_pte(*pte);
+      *pte = 0;
+    }
+    else
+    {
+      panic("uvmunmap: not mapped");
+    }
   }
 }
 
@@ -317,17 +352,38 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
+  for (i = 0; i < sz; i += PGSIZE)
+  {
+    if ((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+
+    // fork 시, memory의 page + swapped-out page 복사
+    if (((*pte & PTE_V) == 0) && (*pte & PTE_SWAP))
+    {
+      if (swap_in(old, i) < 0)
+        goto err;
+
+      pte = walk(old, i, 0);
+
+      if (pte == 0)
+        panic("uvmcopy: pte disappeared");
+    }
+
+    if ((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    // clock reference bit는 상속 x
+    flags &= ~PTE_A;
+
+    if ((mem = kalloc()) == 0)
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+
+    memmove(mem, (char *)pa, PGSIZE);
+
+    if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0)
+    {
       kfree(mem);
       goto err;
     }
@@ -365,10 +421,25 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
+
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+
+    if (pte == 0)
       return -1;
+
+    // kernel이 user memory에 쓰는 경로 -> 여기서 직접 swap-in
+    if (((*pte & PTE_V) == 0) && (*pte & PTE_SWAP))
+    {
+      if (swap_in(pagetable, va0) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+      if (pte == 0)
+        return -1;
+    }
+
+    if ((*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_W) == 0)
+      return -1;
+
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
     if(n > len)

@@ -58,3 +58,7 @@ struct dirent {
   char name[DIRSIZ];
 };
 
+
+
+extern int nr_sectors_read;
+extern int nr_sectors_write;
