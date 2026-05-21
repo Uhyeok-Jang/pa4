@@ -78,26 +78,35 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
 {
   int i = 0;
   struct proc *pr = myproc();
+  char ch;
 
-  acquire(&pi->lock);
+  // 락 잡기 전에 copyin 실행
   while(i < n){
+    if (copyin(pr->pagetable, &ch, addr + i, 1) == -1)
+      break;
+
+    acquire(&pi->lock);
+
+    while(pi->nwrite == pi->nread + PIPESIZE){ // DOC: pipewrite-full
+      if(pi->readopen == 0 || killed(pr)){
+        release(&pi->lock);
+        return -1;
+      }
+      wakeup(&pi->nread);
+      sleep(&pi->nwrite, &pi->lock);
+    }
+
     if(pi->readopen == 0 || killed(pr)){
       release(&pi->lock);
       return -1;
     }
-    if(pi->nwrite == pi->nread + PIPESIZE){ //DOC: pipewrite-full
-      wakeup(&pi->nread);
-      sleep(&pi->nwrite, &pi->lock);
-    } else {
-      char ch;
-      if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
-        break;
-      pi->data[pi->nwrite++ % PIPESIZE] = ch;
-      i++;
-    }
+
+    pi->data[pi->nwrite++ % PIPESIZE] = ch;
+    i++;
+
+    wakeup(&pi->nread);
+    release(&pi->lock);
   }
-  wakeup(&pi->nread);
-  release(&pi->lock);
 
   return i;
 }
