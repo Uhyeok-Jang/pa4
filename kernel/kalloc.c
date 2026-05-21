@@ -111,6 +111,7 @@ lru_remove_locked(struct page *pg)
   num_lru_pages--;
 }
 
+//2nd chance 받은 page를 tail로
 static void
 lru_move_tail_locked(struct page *pg)
 {
@@ -131,6 +132,7 @@ lru_move_tail_locked(struct page *pg)
   page_lru_head->prev = pg;
 }
 
+//새로 mapping -> swap in
 void 
 lru_add(pagetable_t pagetable, uint64 va, uint64 pa)
 {
@@ -146,6 +148,7 @@ lru_add(pagetable_t pagetable, uint64 va, uint64 pa)
   release(&swaplock);
 }
 
+//unmap
 void 
 lru_remove_pa(uint64 pa)
 {
@@ -187,6 +190,7 @@ swap_free_slot_locked(int slot)
   swap_bitmap[byte] &= ~(1 << bit);
 }
 
+//pte에 저장된 swap slot 번호 읽어서 free
 void
 swap_free_slot_by_pte(pte_t pte)
 {
